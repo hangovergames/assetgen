@@ -4,6 +4,18 @@ A command-line tool for generating game graphics using OpenAI's image generation
 
 ## Installation
 
+### Option 1: Clone from Repository
+```bash
+# Clone the repository
+git clone https://github.com/hangovergames/assetgen.git
+cd assetgen
+
+# Initialize and update the assets submodule
+git submodule init
+git submodule update
+```
+
+### Option 2: Install via pip
 ```bash
 pip install hangovergames-assetgen
 ```
