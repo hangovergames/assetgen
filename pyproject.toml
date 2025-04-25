@@ -33,4 +33,11 @@ assetgen = "src.main:main"
 
 [project.urls]
 Homepage = "https://github.com/hangovergames/assetgen"
-Repository = "https://github.com/hangovergames/assetgen.git" 
+Repository = "https://github.com/hangovergames/assetgen.git"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.hatch.build.targets.wheel.shared-data]
+"LICENSE" = "LICENSE"
+"README.md" = "README.md" 
