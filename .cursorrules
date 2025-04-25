@@ -1,0 +1,74 @@
+{
+    "rules": [
+        {
+            "name": "Python Type Hints",
+            "description": "Ensure all function parameters and return values have type hints",
+            "pattern": "def\\s+\\w+\\s*\\([^)]*\\)\\s*(?!->)",
+            "severity": "warning",
+            "message": "Function missing return type annotation"
+        },
+        {
+            "name": "Docstring Format",
+            "description": "Ensure all functions have docstrings in Google style format",
+            "pattern": "def\\s+\\w+\\s*\\([^)]*\\)\\s*(?:->[^:]+)?:\\s*(?!\"\"\")",
+            "severity": "warning",
+            "message": "Function missing docstring"
+        },
+        {
+            "name": "Constants Naming",
+            "description": "Constants should be in UPPER_CASE",
+            "pattern": "\\b[A-Z][a-z0-9_]*\\s*=",
+            "severity": "warning",
+            "message": "Constants should be in UPPER_CASE"
+        },
+        {
+            "name": "Error Handling",
+            "description": "Ensure proper error handling with specific exception types",
+            "pattern": "except\\s+Exception\\s*:",
+            "severity": "warning",
+            "message": "Consider using more specific exception types"
+        },
+        {
+            "name": "API Response Validation",
+            "description": "Validate API responses before accessing data",
+            "pattern": "rsp\\[\"data\"\\]\\[0\\]",
+            "severity": "warning",
+            "message": "Consider validating API response structure before accessing data"
+        },
+        {
+            "name": "Configuration Validation",
+            "description": "Validate configuration values before use",
+            "pattern": "cfg\\.get\\([^,]+\\).*\\[",
+            "severity": "warning",
+            "message": "Consider validating configuration values before use"
+        },
+        {
+            "name": "File Path Handling",
+            "description": "Use Path objects for file operations",
+            "pattern": "os\\.path\\.(join|exists|isdir|isfile)",
+            "severity": "warning",
+            "message": "Consider using pathlib.Path instead of os.path functions"
+        },
+        {
+            "name": "API Rate Limiting",
+            "description": "Ensure proper rate limit handling",
+            "pattern": "time\\.sleep\\(\\d+\\)",
+            "severity": "info",
+            "message": "Consider using exponential backoff for rate limiting"
+        },
+        {
+            "name": "Environment Variables",
+            "description": "Validate required environment variables",
+            "pattern": "os\\.getenv\\([^,]+\\).*\\|\\|",
+            "severity": "warning",
+            "message": "Consider validating required environment variables at startup"
+        },
+        {
+            "name": "Logging",
+            "description": "Use proper logging instead of print statements",
+            "pattern": "print\\(",
+            "severity": "info",
+            "message": "Consider using logging module instead of print statements"
+        }
+    ]
+} 

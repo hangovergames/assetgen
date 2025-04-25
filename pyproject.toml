@@ -1,0 +1,36 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "hangovergames-assetgen"
+version = "0.1.0"
+description = "Generate game graphics using OpenAI's image generation APIs"
+readme = "README.md"
+requires-python = ">=3.8"
+license = "MIT"
+authors = [
+    { name = "Hangover Games", email = "info@hangovergames.com" }
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Games/Entertainment",
+]
+dependencies = [
+    "requests>=2.31.0",
+]
+
+[project.scripts]
+assetgen = "src.main:main"
+
+[project.urls]
+Homepage = "https://github.com/hangovergames/assetgen"
+Repository = "https://github.com/hangovergames/assetgen.git" 

@@ -109,8 +109,8 @@ _CONFIG_RE = re.compile(r"^\s*([A-Z_]+)\s+(.+)$")  # used only to detect keyword
 # Parsing (strict by design)
 ###############################################################################
 
-def parse_spec(path: Path) -> Tuple[str, List[Tuple[str, str]], Dict[str, str]]:
-    """Parse *path* and return (global_prompt, assets, config).
+def parse_spec(path: Path) -> Tuple[str, List[Tuple[str, str]], Dict[str, str], int]:
+    """Parse *path* and return (global_prompt, assets, config, total_assets).
 
     Raises `SystemExit` on the first syntax or keyword error.
     """
@@ -150,9 +150,10 @@ def parse_spec(path: Path) -> Tuple[str, List[Tuple[str, str]], Dict[str, str]]:
             sys.exit(f"Spec error line {lineno}: malformed line.")
 
     print("-" * 40)
-    print(f"Found {len(assets)} assets to generate\n")
+    total_assets = len(assets)
+    print(f"Found {total_assets} total assets in spec file\n")
 
-    return " ".join(global_parts).strip(), assets, config
+    return " ".join(global_parts).strip(), assets, config, total_assets
 
 ###############################################################################
 # OpenAI API helpers (unchanged)
@@ -163,9 +164,13 @@ def build_payload(prompt: str, filename: str, cfg: Dict[str, str]) -> Dict[str, 
     payload: Dict[str, object] = {
         "prompt": prompt,
         "n": 1,  # Always request one image at a time
-        "response_format": "b64_json",  # Always use base64 response format
         "model": "gpt-image-1"  # Default to gpt-image-1
     }
+    
+    # Add response_format only for dall-e models
+    model = cfg.get("model", "gpt-image-1")
+    if model.startswith("dall-e"):
+        payload["response_format"] = "b64_json"
     
     # Add other allowed parameters from config, excluding internal parameters
     internal_params = {
@@ -179,7 +184,7 @@ def build_payload(prompt: str, filename: str, cfg: Dict[str, str]) -> Dict[str, 
             
     # Set output format based on file extension
     ext_map = {".png": "png", ".webp": "webp", ".jpg": "jpeg", ".jpeg": "jpeg"}
-    if cfg.get("model", "gpt-image-1").startswith("gpt-image") and "output_format" not in payload:
+    if model.startswith("gpt-image") and "output_format" not in payload:
         if fmt := ext_map.get(Path(filename).suffix.lower()):
             payload["output_format"] = fmt
             
@@ -218,11 +223,41 @@ def call_openai(payload: Dict[str, object], api_base: str, api_path: str, api_ke
         try:
             r = requests.post(url, headers=headers, json=payload, timeout=120)
             
-            # Log request ID for troubleshooting
-            request_id = r.headers.get('x-request-id')
-            if request_id:
-                print(f"Request ID: {request_id}")
-                
+            # Print API response headers
+            print("\nAPI Response Headers:")
+            print("-" * 40)
+            
+            # API meta information
+            print("API Meta Information:")
+            for header in ["openai-organization", "openai-processing-ms", "openai-version", "x-request-id"]:
+                if value := r.headers.get(header):
+                    print(f"  {header}: {value}")
+            
+            # Rate limiting information - only show if we have rate limit headers
+            rate_limit_headers = [
+                "x-ratelimit-limit-requests",
+                "x-ratelimit-limit-tokens",
+                "x-ratelimit-remaining-requests",
+                "x-ratelimit-remaining-tokens",
+                "x-ratelimit-reset-requests",
+                "x-ratelimit-reset-tokens"
+            ]
+            
+            has_rate_limits = any(r.headers.get(h) for h in rate_limit_headers)
+            if has_rate_limits:
+                print("\nRate Limiting Information:")
+                for header in rate_limit_headers:
+                    if value := r.headers.get(header):
+                        print(f"  {header}: {value}")
+            
+            # Print all headers in verbose mode
+            if cfg.get("verbose"):
+                print("\nAll Response Headers:")
+                for header, value in r.headers.items():
+                    print(f"  {header}: {value}")
+            
+            print("-" * 40)
+            
             # Check rate limits
             remaining_requests = r.headers.get('x-ratelimit-remaining-requests')
             reset_requests = r.headers.get('x-ratelimit-reset-requests')
@@ -270,8 +305,11 @@ def generate(spec: Path, outdir: Path, limit: int, cfg_cli: Dict[str, str]):
     if not outdir.is_absolute():
         outdir = spec.parent / outdir
     
-    preamble, assets, cfg_file = parse_spec(spec)
-    total = len(assets)
+    preamble, assets, cfg_file, total_assets = parse_spec(spec)
+    
+    # Count how many assets need to be generated
+    assets_to_generate = sum(1 for filename, _ in assets if not (outdir / filename).exists())
+    print(f"Found {assets_to_generate} assets to generate (out of {total_assets} total)")
 
     # Map environment variables to config keys
     env_map = {
@@ -340,7 +378,7 @@ def generate(spec: Path, outdir: Path, limit: int, cfg_cli: Dict[str, str]):
                 sys.exit(1)
 
     rem = sum(1 for f, _ in assets if not (outdir / f).exists())
-    print(f"Created {created}; {rem} remaining; {total} total.")
+    print(f"Created {created}; {rem} remaining; {total_assets} total.")
 
 ###############################################################################
 # CLI (strict always)
@@ -349,15 +387,41 @@ def generate(spec: Path, outdir: Path, limit: int, cfg_cli: Dict[str, str]):
 def parse_cli(argv=None):
     ap = argparse.ArgumentParser(description="Generate missing sprites from an asset spec.")
     ap.add_argument("spec", type=Path, help="Path to the spec file")
-    ap.add_argument("-n", "--count", type=int, default=1, help="max images this run (default 1)")
+    ap.add_argument("-c", "--count", type=int, default=1, help="max images this run (default 1)")
     ap.add_argument("-o", "--output-dir", type=Path, default=Path("."), help="output directory (relative to spec file location)")
     ap.add_argument("--continue-on-error", action="store_true", help="continue processing on API errors")
-    for tag in sorted(ALLOWED_TAGS):
-        ap.add_argument(f"--{tag}")
-    ap.add_argument("--api-base")
-    ap.add_argument("--api-path")
-    ap.add_argument("--api-key")
+    ap.add_argument("-v", "--verbose", action="store_true", help="show detailed API response information")
+    
+    # Add OpenAI API parameters with detailed help text
+    ap.add_argument("--background", choices=["transparent", "opaque", "auto"], 
+                   help="Set transparency for the background (gpt-image-1 only). Default: auto")
+    ap.add_argument("--model", choices=["dall-e-2", "dall-e-3", "gpt-image-1"], 
+                   help="The model to use for image generation. Default: dall-e-2")
+    ap.add_argument("--moderation", choices=["low", "auto"], 
+                   help="Content-moderation level for gpt-image-1. Default: auto")
+    ap.add_argument("--output-compression", type=int, metavar="0-100", 
+                   help="Compression level (0-100%%) for gpt-image-1 with webp/jpeg. Default: 100")
+    ap.add_argument("--output-format", choices=["png", "jpeg", "webp"], 
+                   help="Format for generated images (gpt-image-1 only). Default: png")
+    ap.add_argument("--quality", choices=["auto", "high", "medium", "low", "hd", "standard"], 
+                   help="Image quality. For gpt-image-1: auto/high/medium/low. For dall-e-3: hd/standard. For dall-e-2: standard only")
+    ap.add_argument("--size", 
+                   help="Image size. For gpt-image-1: 1024x1024/1536x1024/1024x1536/auto. For dall-e-2: 256x256/512x512/1024x1024. For dall-e-3: 1024x1024/1792x1024/1024x1792")
+    ap.add_argument("--style", choices=["vivid", "natural"], 
+                   help="Image style (dall-e-3 only). Default: vivid")
+    
+    # Add API configuration arguments
+    ap.add_argument("--api-base", default="https://api.openai.com",
+                   help="OpenAI API base URL (default: https://api.openai.com)")
+    ap.add_argument("--api-path", default="/v1/images/generations",
+                   help="OpenAI API path (default: /v1/images/generations)")
+    ap.add_argument("--api-key", help="OpenAI API key")
+    
     ns = ap.parse_args(argv)
+
+    # Validate output-compression range
+    if ns.output_compression is not None and not 0 <= ns.output_compression <= 100:
+        ap.error("output-compression must be between 0 and 100")
 
     cli_cfg = {k: v for k, v in vars(ns).items() if v is not None and k in ALLOWED_TAGS | {"api_base", "api_path", "api_key"}}
     return ns, cli_cfg
