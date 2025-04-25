@@ -1,8 +1,6 @@
 # assetgen
 
-**assetgen** is a lightweight command‑line helper that converts a plain‑text 
-specification file into a complete set of top‑down 2‑D game sprites using the 
-OpenAI Images API.
+**assetgen** is a lightweight command‑line helper that converts a plain‑text specification file into a complete set of game sprites using the OpenAI Images API.
 
 ---
 
