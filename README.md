@@ -22,7 +22,7 @@ pip install hangovergames-assetgen
 
 ## Usage
 
-Create a spec file (e.g., `assets.txt`) with your image generation instructions:
+Create [a spec file (e.g., `Assetgenfile`)](https://hangovergames.github.io/assetgen/Assetgenfile) with your image generation instructions:
 
 ```text
 PROMPT Create a clean top‑down 2‑D sprite on a transparent background.
@@ -36,7 +36,7 @@ ASSET road_corner_ne.png  A 256×256 90‑degree bend …
 Then run:
 
 ```bash
-assetgen assets.txt
+assetgen Assetgenfile
 ```
 
 ### Command Line Options
