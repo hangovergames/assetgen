@@ -25,7 +25,7 @@ Each line (ignoring leading whitespace) **must begin with one of these tokens**
 ```
 PROMPT <text …>
 ASSET  <filename> <asset‑specific prompt>
-MODEL  <dall-e-2|dall-e-3|gpt-image-1>
+MODEL  <dall-e-2|dall-e-3|gpt-image-1|gpt-5.2>
 BACKGROUND <transparent|opaque|auto>
 MODERATION <low|auto>
 OUTPUT_COMPRESSION <0‑100>
@@ -42,7 +42,7 @@ Example:
 
 ```text
 PROMPT Create a clean top‑down 2‑D sprite on a transparent background.
-MODEL gpt-image-1
+MODEL gpt-5.2
 SIZE 1024x1024
 BACKGROUND transparent
 ASSET road_straight_ns.png A seamless 256×256 asphalt road …
@@ -159,39 +159,137 @@ def parse_spec(path: Path) -> Tuple[str, List[Tuple[str, str]], Dict[str, str], 
 # OpenAI API helpers (unchanged)
 ###############################################################################
 
-def build_payload(prompt: str, filename: str, cfg: Dict[str, str]) -> Dict[str, object]:
-    # Base payload with required parameters
+def load_dotenv_if_available() -> None:
+    """Load environment variables from a local `.env` file (if supported).
+
+    This is a convenience for local development: if `python-dotenv` is installed and
+    a `.env` file can be found, we load it (without overriding already-set env vars).
+    """
+
+    try:
+        from dotenv import find_dotenv, load_dotenv  # type: ignore[import-not-found]
+    except ImportError:
+        return
+
+    dotenv_path = find_dotenv(filename=".env", usecwd=True)
+    if dotenv_path:
+        load_dotenv(dotenv_path, override=False)
+
+
+def _model_uses_responses_api(model: str) -> bool:
+    """Return True if *model* should be called via the Responses API.
+
+    GPT-5.2 image generation is exposed via the Responses API using the
+    `image_generation` tool (see OpenAI image generation guide).
+    """
+
+    images_api_models = {"dall-e-2", "dall-e-3", "gpt-image-1"}
+    return model not in images_api_models
+
+
+def build_images_payload(prompt: str, filename: str, cfg: Dict[str, str]) -> Dict[str, object]:
+    """Build a payload for the legacy Images API (`/v1/images/generations`).
+
+    Args:
+        prompt: Full text prompt to send to the model.
+        filename: Output filename (used to infer output format when possible).
+        cfg: Merged configuration dict.
+
+    Returns:
+        JSON-serializable payload for the Images API.
+    """
+
     payload: Dict[str, object] = {
         "prompt": prompt,
         "n": 1,  # Always request one image at a time
-        "model": "gpt-image-1"  # Default to gpt-image-1
+        "model": "gpt-image-1",  # Default to gpt-image-1
     }
-    
-    # Add response_format only for dall-e models
-    model = cfg.get("model", "gpt-image-1")
+
+    model = str(cfg.get("model", "gpt-image-1"))
+
+    # DALL·E endpoints often require explicit base64 output handling.
     if model.startswith("dall-e"):
         payload["response_format"] = "b64_json"
-    
-    # Add other allowed parameters from config, excluding internal parameters
+
     internal_params = {
-        "n", "response_format", "continue_on_error", 
-        "api_base", "api_path", "api_key",
-        "openai_organization", "openai_project"
+        "n",
+        "response_format",
+        "continue_on_error",
+        "api_base",
+        "api_path",
+        "api_key",
+        "openai_organization",
+        "openai_project",
+        "verbose",
     }
     for key in ALLOWED_TAGS - internal_params:
         if key in cfg:
             payload[key] = cfg[key]
-            
-    # Set output format based on file extension
+
+    # Infer output_format from extension for gpt-image-1 unless explicitly set.
     ext_map = {".png": "png", ".webp": "webp", ".jpg": "jpeg", ".jpeg": "jpeg"}
     if model.startswith("gpt-image") and "output_format" not in payload:
         if fmt := ext_map.get(Path(filename).suffix.lower()):
             payload["output_format"] = fmt
-            
+
     return payload
 
 
-def call_openai(payload: Dict[str, object], api_base: str, api_path: str, api_key: str, cfg: Dict[str, str]):
+def build_responses_payload(prompt: str, cfg: Dict[str, str]) -> Dict[str, object]:
+    """Build a payload for the Responses API (`/v1/responses`) for GPT-5.2 images.
+
+    The Responses API uses the `image_generation` tool to produce an image.
+
+    Args:
+        prompt: Full text prompt to send.
+        cfg: Merged configuration dict.
+
+    Returns:
+        JSON-serializable payload for the Responses API.
+    """
+
+    model = str(cfg.get("model", "gpt-5.2"))
+
+    tool: Dict[str, object] = {"type": "image_generation"}
+    # Map our existing config keys onto the tool options used by Responses.
+    for key in ("size", "quality", "background", "moderation"):
+        if key in cfg:
+            tool[key] = cfg[key]
+
+    # The Images API uses output_format; the tool uses `format`.
+    if "output_format" in cfg:
+        tool["format"] = cfg["output_format"]
+
+    return {
+        "model": model,
+        "input": prompt,
+        "tools": [tool],
+    }
+
+
+def call_openai(
+    payload: Dict[str, object],
+    api_base: str,
+    api_path: str,
+    api_key: str,
+    cfg: Dict[str, str],
+) -> Dict[str, object]:
+    """Call the OpenAI API and return the decoded JSON response.
+
+    Args:
+        payload: Request JSON payload.
+        api_base: API base (e.g. https://api.openai.com).
+        api_path: API path (e.g. /v1/images/generations or /v1/responses).
+        api_key: Bearer token.
+        cfg: Merged configuration dict (used for headers + verbose output).
+
+    Returns:
+        Parsed JSON response body.
+
+    Raises:
+        requests.exceptions.RequestException: For network or HTTP-level failures.
+        ValueError: If the response is not valid JSON.
+    """
     url = f"{api_base.rstrip('/')}/{api_path.lstrip('/')}"
     headers = {
         "Content-Type": "application/json",
@@ -278,7 +376,10 @@ def call_openai(payload: Dict[str, object], api_base: str, api_path: str, api_ke
                     error_msg += f"\nDetails: {error_data}"
                 raise requests.exceptions.HTTPError(error_msg)
                 
-            return r.json()
+            data = r.json()
+            if not isinstance(data, dict):
+                raise ValueError("API response JSON was not an object")
+            return data
             
         except requests.exceptions.RequestException as e:
             if isinstance(e, requests.exceptions.HTTPError):
@@ -287,17 +388,64 @@ def call_openai(payload: Dict[str, object], api_base: str, api_path: str, api_ke
 
 
 def image_bytes(d: Dict[str, str]) -> bytes:
+    """Extract image bytes from an Images API data object."""
     if "b64_json" in d:
         return base64.b64decode(d["b64_json"])
     if "url" in d:
         return requests.get(d["url"], timeout=120).content
     raise ValueError("Unexpected image data object")
 
+
+def response_image_bytes(rsp: Dict[str, object]) -> bytes:
+    """Extract image bytes from either the Images API or Responses API response.
+
+    Args:
+        rsp: Parsed JSON response body.
+
+    Returns:
+        Raw image bytes.
+
+    Raises:
+        KeyError: If the response does not contain expected fields.
+        ValueError: If no image data could be found/decoded.
+        TypeError: If response types are unexpected.
+    """
+
+    # Images API: {"data": [{"b64_json": "..."}]}
+    if "data" in rsp and isinstance(rsp["data"], list) and rsp["data"]:
+        first = rsp["data"][0]
+        if isinstance(first, dict):
+            return image_bytes(first)  # type: ignore[arg-type]
+        raise TypeError("Images API response contained non-object in data[0]")
+
+    # Responses API: output[] items, look for image_generation_call with base64 result.
+    output = rsp.get("output")
+    if isinstance(output, list):
+        for item in output:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") != "image_generation_call":
+                continue
+            result = item.get("result")
+            if isinstance(result, str) and result.strip():
+                return base64.b64decode(result)
+            raise ValueError("Responses API image_generation_call missing base64 result")
+
+    raise ValueError("No image data found in API response")
+
 ###############################################################################
 # Generation loop (unchanged except strict removed)
 ###############################################################################
 
-def generate(spec: Path, outdir: Path, limit: int, cfg_cli: Dict[str, str]):
+def generate(spec: Path, outdir: Path, limit: int, cfg_cli: Dict[str, str]) -> None:
+    """Generate missing assets described in *spec* into *outdir*.
+
+    Args:
+        spec: Path to spec file.
+        outdir: Output directory (relative paths are resolved relative to spec).
+        limit: Maximum number of new images to create this run.
+        cfg_cli: CLI overrides merged on top of spec and environment config.
+    """
     # Convert spec path to absolute path
     spec = spec.resolve()
     
@@ -338,7 +486,19 @@ def generate(spec: Path, outdir: Path, limit: int, cfg_cli: Dict[str, str]):
     cfg = {**cfg_file, **env_cfg, **cfg_cli}
 
     api_base = cfg.get("api_base", os.getenv("OPENAI_API_BASE", "https://api.openai.com"))
-    api_path = cfg.get("api_path", os.getenv("OPENAI_API_PATH", "/v1/images/generations"))
+
+    model = str(cfg.get("model", "gpt-image-1"))
+    uses_responses = _model_uses_responses_api(model)
+    default_api_path = "/v1/responses" if uses_responses else "/v1/images/generations"
+
+    # Avoid accidental mismatch when users have OPENAI_API_PATH set for the Images API.
+    # For Responses-based models (e.g. gpt-5.2), only honor explicit CLI override.
+    if "api_path" in cfg_cli:
+        api_path = str(cfg_cli["api_path"])
+    elif uses_responses:
+        api_path = default_api_path
+    else:
+        api_path = os.getenv("OPENAI_API_PATH", default_api_path)
     api_key = cfg.get("api_key", os.getenv("OPENAI_API_KEY"))
     if not api_key:
         sys.exit("OPENAI_API_KEY (or --api-key) not provided.")
@@ -353,10 +513,13 @@ def generate(spec: Path, outdir: Path, limit: int, cfg_cli: Dict[str, str]):
         if dest.exists():
             continue
         prompt = f"{preamble} {details}".strip()
-        payload = build_payload(prompt, filename, cfg)
         try:
+            if _model_uses_responses_api(model):
+                payload = build_responses_payload(prompt, cfg)
+            else:
+                payload = build_images_payload(prompt, filename, cfg)
             rsp = call_openai(payload, api_base, api_path, api_key, cfg)
-            img = image_bytes(rsp["data"][0])
+            img = response_image_bytes(rsp)
             dest.write_bytes(img)
             dest.with_suffix(".md").write_text(textwrap.dedent(f"""
                 # Prompt for {filename}
@@ -366,7 +529,7 @@ def generate(spec: Path, outdir: Path, limit: int, cfg_cli: Dict[str, str]):
                 """))
             created += 1
             print(f"✓ {filename}")
-        except Exception as exc:
+        except (requests.exceptions.RequestException, KeyError, ValueError, TypeError) as exc:
             print(f"⚠️  {filename}: {exc}")
             # Handle continue_on_error for both string and boolean values
             continue_on_error = cfg.get("continue_on_error")
@@ -384,7 +547,15 @@ def generate(spec: Path, outdir: Path, limit: int, cfg_cli: Dict[str, str]):
 # CLI (strict always)
 ###############################################################################
 
-def parse_cli(argv=None):
+def parse_cli(argv: Optional[List[str]] = None) -> Tuple[argparse.Namespace, Dict[str, str]]:
+    """Parse CLI args into (namespace, cli_cfg).
+
+    Args:
+        argv: Optional argv list; defaults to sys.argv.
+
+    Returns:
+        Parsed argparse namespace and filtered CLI config dict.
+    """
     ap = argparse.ArgumentParser(description="Generate missing sprites from an asset spec.")
     ap.add_argument("spec", type=Path, help="Path to the spec file")
     ap.add_argument("-c", "--count", type=int, default=1, help="max images this run (default 1)")
@@ -395,8 +566,13 @@ def parse_cli(argv=None):
     # Add OpenAI API parameters with detailed help text
     ap.add_argument("--background", choices=["transparent", "opaque", "auto"], 
                    help="Set transparency for the background (gpt-image-1 only). Default: auto")
-    ap.add_argument("--model", choices=["dall-e-2", "dall-e-3", "gpt-image-1"], 
-                   help="The model to use for image generation. Default: dall-e-2")
+    ap.add_argument(
+        "--model",
+        help=(
+            "Model to use. Use Images API models: dall-e-2, dall-e-3, gpt-image-1. "
+            "Use GPT-5.2 image generation via Responses API: gpt-5.2 (and related)."
+        ),
+    )
     ap.add_argument("--moderation", choices=["low", "auto"], 
                    help="Content-moderation level for gpt-image-1. Default: auto")
     ap.add_argument("--output-compression", type=int, metavar="0-100", 
@@ -411,10 +587,17 @@ def parse_cli(argv=None):
                    help="Image style (dall-e-3 only). Default: vivid")
     
     # Add API configuration arguments
-    ap.add_argument("--api-base", default="https://api.openai.com",
-                   help="OpenAI API base URL (default: https://api.openai.com)")
-    ap.add_argument("--api-path", default="/v1/images/generations",
-                   help="OpenAI API path (default: /v1/images/generations)")
+    # Defaults are applied at runtime (so we can pick the right endpoint based on model).
+    ap.add_argument(
+        "--api-base",
+        default=None,
+        help="OpenAI API base URL (default: https://api.openai.com)",
+    )
+    ap.add_argument(
+        "--api-path",
+        default=None,
+        help="OpenAI API path (default depends on model; images: /v1/images/generations, responses: /v1/responses)",
+    )
     ap.add_argument("--api-key", help="OpenAI API key")
     
     ns = ap.parse_args(argv)
@@ -427,7 +610,10 @@ def parse_cli(argv=None):
     return ns, cli_cfg
 
 
-def main(argv=None):
+def main(argv: Optional[List[str]] = None) -> None:
+    """Program entrypoint."""
+
+    load_dotenv_if_available()
     ns, cfg_cli = parse_cli(argv)
     generate(ns.spec, ns.output_dir, ns.count, cfg_cli)
 
