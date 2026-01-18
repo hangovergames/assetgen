@@ -26,7 +26,7 @@ Create [a spec file (e.g., `Assetgenfile`)](https://hangovergames.github.io/asse
 
 ```text
 PROMPT Create a clean top‑down 2‑D sprite on a transparent background.
-MODEL gpt-image-1
+MODEL gpt-5.2
 SIZE 1024x1024
 BACKGROUND transparent
 ASSET road_straight_ns.png A seamless 256×256 asphalt road …
@@ -38,6 +38,9 @@ Then run:
 ```bash
 assetgen Assetgenfile
 ```
+
+Note: `--output-dir` is interpreted relative to the spec file location. For example, if your spec is
+`assets/gpt52_sample/Assetgenfile` and you want output under that folder, pass `-o out` (not `-o assets/gpt52_sample/out`).
 
 ### Command Line Options
 
@@ -54,7 +57,10 @@ You can configure the API using environment variables:
 - `OPENAI_ORGANIZATION`: Your OpenAI organization ID
 - `OPENAI_PROJECT`: Your OpenAI project ID
 - `OPENAI_API_BASE`: API base URL (default: https://api.openai.com)
-- `OPENAI_API_PATH`: API path (default: /v1/images/generations)
+- `OPENAI_API_PATH`: API path (default depends on model: `/v1/images/generations` for images models, `/v1/responses` for GPT‑5.2 image tool)
+
+This tool also supports loading a local `.env` file (via `python-dotenv`) so you can
+store `OPENAI_API_KEY=...` without exporting it in your shell.
 
 ### Spec File Format
 
@@ -64,6 +70,7 @@ Each line (ignoring leading whitespace) must begin with one of these tokens (cas
 PROMPT <text …>
 ASSET  <filename> <asset‑specific prompt>
 MODEL  <dall-e-2|dall-e-3|gpt-image-1>
+MODEL  <gpt-5.2>  (image generation via Responses API tool)
 BACKGROUND <transparent|opaque|auto>
 MODERATION <low|auto>
 OUTPUT_COMPRESSION <0‑100>
