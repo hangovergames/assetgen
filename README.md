@@ -15,9 +15,34 @@ git submodule init
 git submodule update
 ```
 
+### Run locally (recommended for development)
+
+Create a virtualenv and install in editable mode:
+
+```bash
+cd assetgen
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -U pip
+python -m pip install -e .
+```
+
+Create a `.env` file in the repo root (or export env vars in your shell):
+
+```bash
+OPENAI_API_KEY=sk-...
+```
+
 ### Option 2: Install via pip
 ```bash
 pip install hangovergames-assetgen
+```
+
+If your system Python is “externally managed” (PEP 668, common on Homebrew/macOS), use a virtualenv as shown above, or consider `pipx`:
+
+```bash
+brew install pipx
+pipx install hangovergames-assetgen
 ```
 
 ## Usage
@@ -41,6 +66,20 @@ assetgen Assetgenfile
 
 Note: `--output-dir` is interpreted relative to the spec file location. For example, if your spec is
 `assets/gpt52_sample/Assetgenfile` and you want output under that folder, pass `-o out` (not `-o assets/gpt52_sample/out`).
+
+### Examples
+
+Run the included Citygame spec (generate 1 missing asset into the same folder as the spec):
+
+```bash
+assetgen assets/citygame/Assetgenfile -c 1 -o .
+```
+
+Run the GPT‑5.2 smoke test spec (writes output under `assets/gpt52_sample/out/`):
+
+```bash
+assetgen assets/gpt52_sample/Assetgenfile -c 1 -o out
+```
 
 ### Command Line Options
 
